@@ -49,8 +49,9 @@ async function streamFromAgentCore(
   };
 
   try {
-    const encodedEndpoint = encodeURIComponent(process.env.AGENT_CORE_ENDPOINT || '');
+    const encodedEndpoint = process.env.AGENT_CORE_ENDPOINT;
     const fullUrl = `${BEDROCK_AGENT_CORE_ENDPOINT_URL}/runtimes/${encodedEndpoint}/invocations`;
+    console.log("fullUrl:", fullUrl)
 
     const agentResponse = await fetch(fullUrl, {
       method: 'POST',
