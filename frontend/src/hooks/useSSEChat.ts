@@ -20,6 +20,19 @@ const extractDataFromLine = (line: string): string | null => {
   return line.trim() || null;
 };
 
+// 型定義
+interface ContentBlockDelta {
+  contentBlockDelta?: {
+    delta?: {
+      text?: string;
+    };
+  };
+}
+
+interface MessageData {
+  content?: string;
+}
+
 // メッセージ内容抽出
 const extractMessageContent = (parsed: Record<string, unknown>): string | null => {
   // エラーチェック
@@ -28,19 +41,19 @@ const extractMessageContent = (parsed: Record<string, unknown>): string | null =
   }
 
   // 新しいイベント形式（contentBlockDelta）
-  const event = parsed.event as any;
+  const event = parsed.event as ContentBlockDelta;
   if (event?.contentBlockDelta?.delta?.text && typeof event.contentBlockDelta.delta.text === 'string') {
     return event.contentBlockDelta.delta.text;
   }
 
   // イベント形式（Strands/AgentCore）
-  if (event && typeof event === 'string') {
+  if (parsed.event && typeof parsed.event === 'string') {
     const textEvents = ['text', 'chunk', 'delta'];
-    if (textEvents.includes(event) && parsed.data && typeof parsed.data === 'string') {
+    if (textEvents.includes(parsed.event) && parsed.data && typeof parsed.data === 'string') {
       return parsed.data;
     }
-    if (event === 'message' && parsed.data && typeof parsed.data === 'object' && parsed.data !== null) {
-      const data = parsed.data as any;
+    if (parsed.event === 'message' && parsed.data && typeof parsed.data === 'object' && parsed.data !== null) {
+      const data = parsed.data as MessageData;
       if (data.content && typeof data.content === 'string') {
         return data.content;
       }
