@@ -21,31 +21,35 @@ const extractDataFromLine = (line: string): string | null => {
 };
 
 // メッセージ内容抽出
-const extractMessageContent = (parsed: any): string | null => {
+const extractMessageContent = (parsed: Record<string, unknown>): string | null => {
   // エラーチェック
-  if (parsed.error) {
+  if (parsed.error && typeof parsed.error === 'string') {
     throw new Error(parsed.error);
   }
 
   // 新しいイベント形式（contentBlockDelta）
-  if (parsed.event?.contentBlockDelta?.delta?.text) {
-    return parsed.event.contentBlockDelta.delta.text;
+  const event = parsed.event as any;
+  if (event?.contentBlockDelta?.delta?.text && typeof event.contentBlockDelta.delta.text === 'string') {
+    return event.contentBlockDelta.delta.text;
   }
 
   // イベント形式（Strands/AgentCore）
-  if (parsed.event) {
+  if (event && typeof event === 'string') {
     const textEvents = ['text', 'chunk', 'delta'];
-    if (textEvents.includes(parsed.event) && parsed.data) {
+    if (textEvents.includes(event) && parsed.data && typeof parsed.data === 'string') {
       return parsed.data;
     }
-    if (parsed.event === 'message' && parsed.data?.content) {
-      return parsed.data.content;
+    if (event === 'message' && parsed.data && typeof parsed.data === 'object' && parsed.data !== null) {
+      const data = parsed.data as any;
+      if (data.content && typeof data.content === 'string') {
+        return data.content;
+      }
     }
     return null;
   }
 
   // 従来形式
-  if (parsed.content) return parsed.content;
+  if (parsed.content && typeof parsed.content === 'string') return parsed.content;
   if (parsed.data && typeof parsed.data === 'string') return parsed.data;
 
   return null;
@@ -89,7 +93,7 @@ const processStreamingResponse = async (
             currentMessage += content;
             onMessageUpdate(currentMessage);
           }
-        } catch (parseError) {
+        } catch {
           // JSONパースエラーは無視
         }
       }

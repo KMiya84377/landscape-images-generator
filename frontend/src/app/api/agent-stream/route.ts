@@ -39,9 +39,10 @@ function extractAccessToken(request: NextRequest): string {
 async function streamFromAgentCore(
   accessToken: string,
   prompt: string,
-  sessionId: string,
-  controller: ReadableStreamDefaultController<any>
+  _sessionId: string,
+  controller: ReadableStreamDefaultController<Uint8Array>
 ): Promise<void> {
+  const encoder = new TextEncoder();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${accessToken}`,
@@ -100,16 +101,16 @@ async function streamFromAgentCore(
 
           try {
             const parsed = JSON.parse(data);
-            controller.enqueue(`data: ${JSON.stringify(parsed)}\n\n`);
-          } catch (e) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(parsed)}\n\n`));
+          } catch {
             // JSONパースエラーは無視
           }
         } else {
           // JSON形式の直接レスポンスの場合
           try {
             const parsed = JSON.parse(line);
-            controller.enqueue(`data: ${JSON.stringify(parsed)}\n\n`);
-          } catch (e) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(parsed)}\n\n`));
+          } catch {
             // JSONパースエラーは無視
           }
         }
@@ -120,8 +121,8 @@ async function streamFromAgentCore(
     if (buffer.trim()) {
       try {
         const parsed = JSON.parse(buffer);
-        controller.enqueue(`data: ${JSON.stringify(parsed)}\n\n`);
-      } catch (e) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(parsed)}\n\n`));
+      } catch {
         // JSONパースエラーは無視
       }
     }
@@ -155,7 +156,8 @@ export async function POST(request: NextRequest) {
         } catch (error) {
           logError('AgentCore通信', error);
           const errorMessage = getErrorMessage(error);
-          controller.enqueue(`data: ${JSON.stringify({ error: `AgentCore通信エラー: ${errorMessage}` })}\n\n`);
+          const encoder = new TextEncoder();
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: `AgentCore通信エラー: ${errorMessage}` })}\n\n`));
           controller.close();
         }
       },
