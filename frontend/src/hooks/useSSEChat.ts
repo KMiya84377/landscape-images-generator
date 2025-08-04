@@ -92,7 +92,7 @@ const processStreamingResponse = async (
 
       for (const line of lines) {
         if (!line.trim()) continue;
-        
+
 
 
         const dataToProcess = extractDataFromLine(line);
@@ -152,6 +152,7 @@ export function useSSEChat(options: SSEChatOptions = {}) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Accept': 'text/event-stream',
           'Authorization': `Bearer ${idToken}`,
           'X-Access-Token': accessToken,
         },
