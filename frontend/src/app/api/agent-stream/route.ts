@@ -108,14 +108,18 @@ async function streamFromAgentCore(
       }
 
       const chunk = decoder.decode(value, { stream: true });
+      console.log('Received chunk:', chunk.length, 'bytes');
       buffer += chunk;
 
-      // 改行で分割してイベントを処理
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || ''; // 最後の不完全な行は保持
+      // 即座に処理するため、改行ごとに分割して順次処理
+      let newlineIndex;
+      while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, newlineIndex).trim();
+        buffer = buffer.slice(newlineIndex + 1);
 
-      for (const line of lines) {
-        if (line.trim() === '' || isClosed) continue;
+        if (!line || isClosed) continue;
+
+        console.log('Processing line:', line.substring(0, 100));
 
         // SSE形式の処理
         if (line.startsWith('data: ')) {
@@ -128,6 +132,7 @@ async function streamFromAgentCore(
           try {
             const parsed = JSON.parse(data);
             safeEnqueue(encoder.encode(`data: ${JSON.stringify(parsed)}\n\n`));
+            console.log('Sent SSE data');
           } catch {
             // JSONパースエラーは無視
           }
@@ -136,6 +141,7 @@ async function streamFromAgentCore(
           try {
             const parsed = JSON.parse(line);
             safeEnqueue(encoder.encode(`data: ${JSON.stringify(parsed)}\n\n`));
+            console.log('Sent JSON data');
           } catch {
             // JSONパースエラーは無視
           }
