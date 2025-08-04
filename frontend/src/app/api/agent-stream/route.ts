@@ -177,6 +177,8 @@ export async function POST(request: NextRequest) {
     console.log('Memory Size:', process.env.AWS_LAMBDA_FUNCTION_MEMORY_SIZE);
     console.log('Timeout:', process.env.AWS_LAMBDA_FUNCTION_TIMEOUT);
     console.log('Runtime:', process.env.AWS_LAMBDA_RUNTIME_API ? 'Lambda' : 'Unknown');
+    console.log('Lambda@Edge Check:', process.env._LAMBDA_SERVER_PORT ? 'Lambda@Edge' : 'Regional Lambda');
+    console.log('CloudFront:', request.headers.get('cloudfront-viewer-country') ? 'Yes' : 'No');
     console.log('CloudFront Request ID:', request.headers.get('cloudfront-viewer-country'));
     console.log('User Agent:', request.headers.get('user-agent'));
     console.log('Accept Header:', request.headers.get('accept'));
@@ -197,25 +199,27 @@ export async function POST(request: NextRequest) {
       return new Response('Bad Request: Empty or invalid prompt', { status: 400 });
     }
 
-    // AgentCore Runtimeとの通信用ストリーム
+    // ストリーミングテスト用の簡単なストリーム
     const stream = new ReadableStream({
       async start(controller) {
         console.log('🚀 SSE Stream started');
+        const encoder = new TextEncoder();
+        
         try {
-          await streamFromAgentCore(accessToken, prompt, sessionId, controller);
+          // テスト用の簡単なストリーミング
+          for (let i = 1; i <= 3; i++) {
+            console.log(`Sending chunk ${i}`);
+            controller.enqueue(encoder.encode(`data: {"test": "chunk ${i}"}\n\n`));
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+          
+          controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
+          controller.close();
           console.log('✅ SSE Stream completed successfully');
         } catch (error) {
           console.log('❌ SSE Stream failed:', error);
-          logError('AgentCore通信', error);
-          const errorMessage = getErrorMessage(error);
-          const encoder = new TextEncoder();
-
-          try {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: `AgentCore通信エラー: ${errorMessage}` })}\n\n`));
-            controller.close();
-          } catch (controllerError) {
-            console.warn('Controller operation failed:', controllerError);
-          }
+          controller.enqueue(encoder.encode(`data: {"error": "Stream failed"}\n\n`));
+          controller.close();
         }
       },
     });
