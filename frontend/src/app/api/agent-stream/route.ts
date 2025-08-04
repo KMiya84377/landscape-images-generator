@@ -48,6 +48,31 @@ async function streamFromAgentCore(
     'Authorization': `Bearer ${accessToken}`,
   };
 
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  let isClosed = false;
+
+  const safeClose = () => {
+    if (!isClosed) {
+      isClosed = true;
+      try {
+        controller.close();
+      } catch (error) {
+        console.warn('Controller already closed:', error);
+      }
+    }
+  };
+
+  const safeEnqueue = (data: Uint8Array) => {
+    if (!isClosed) {
+      try {
+        controller.enqueue(data);
+      } catch (error) {
+        console.warn('Failed to enqueue data:', error);
+        isClosed = true;
+      }
+    }
+  };
+
   try {
     const encodedEndpoint = encodeURIComponent(process.env.AGENT_CORE_ENDPOINT || '');
     const fullUrl = `${BEDROCK_AGENT_CORE_ENDPOINT_URL}/runtimes/${encodedEndpoint}/invocations`;
@@ -69,13 +94,13 @@ async function streamFromAgentCore(
       throw new Error('No response body from AgentCore');
     }
 
-    const reader = agentResponse.body.getReader();
+    reader = agentResponse.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
 
     console.log('ストリーミング開始');
 
-    while (true) {
+    while (!isClosed) {
       const { done, value } = await reader.read();
       if (done) {
         console.log('ストリーミング完了');
@@ -90,19 +115,19 @@ async function streamFromAgentCore(
       buffer = lines.pop() || ''; // 最後の不完全な行は保持
 
       for (const line of lines) {
-        if (line.trim() === '') continue;
+        if (line.trim() === '' || isClosed) continue;
 
         // SSE形式の処理
         if (line.startsWith('data: ')) {
           const data = line.slice(6).trim();
           if (data === '[DONE]') {
-            controller.close();
+            safeClose();
             return;
           }
 
           try {
             const parsed = JSON.parse(data);
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(parsed)}\n\n`));
+            safeEnqueue(encoder.encode(`data: ${JSON.stringify(parsed)}\n\n`));
           } catch {
             // JSONパースエラーは無視
           }
@@ -110,7 +135,7 @@ async function streamFromAgentCore(
           // JSON形式の直接レスポンスの場合
           try {
             const parsed = JSON.parse(line);
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(parsed)}\n\n`));
+            safeEnqueue(encoder.encode(`data: ${JSON.stringify(parsed)}\n\n`));
           } catch {
             // JSONパースエラーは無視
           }
@@ -119,17 +144,24 @@ async function streamFromAgentCore(
     }
 
     // バッファに残ったデータを処理
-    if (buffer.trim()) {
+    if (buffer.trim() && !isClosed) {
       try {
         const parsed = JSON.parse(buffer);
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(parsed)}\n\n`));
+        safeEnqueue(encoder.encode(`data: ${JSON.stringify(parsed)}\n\n`));
       } catch {
         // JSONパースエラーは無視
       }
     }
 
-    controller.close();
+    safeClose();
   } catch (error) {
+    if (reader) {
+      try {
+        reader.releaseLock();
+      } catch {
+        // リーダーのリリースに失敗しても続行
+      }
+    }
     throw error;
   }
 }
@@ -158,8 +190,13 @@ export async function POST(request: NextRequest) {
           logError('AgentCore通信', error);
           const errorMessage = getErrorMessage(error);
           const encoder = new TextEncoder();
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: `AgentCore通信エラー: ${errorMessage}` })}\n\n`));
-          controller.close();
+
+          try {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: `AgentCore通信エラー: ${errorMessage}` })}\n\n`));
+            controller.close();
+          } catch (controllerError) {
+            console.warn('Controller operation failed:', controllerError);
+          }
         }
       },
     });
