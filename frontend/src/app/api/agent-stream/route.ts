@@ -66,6 +66,8 @@ async function streamFromAgentCore(
     if (!isClosed) {
       try {
         controller.enqueue(data);
+        // 強制的にフラッシュするための空データ
+        controller.enqueue(new Uint8Array(0));
       } catch (error) {
         console.warn('Failed to enqueue data:', error);
         isClosed = true;
@@ -75,6 +77,7 @@ async function streamFromAgentCore(
 
   try {
     const encodedEndpoint = encodeURIComponent(process.env.AGENT_CORE_ENDPOINT || '');
+    // const fullUrl = `${BEDROCK_AGENT_CORE_ENDPOINT_URL}/runtimes/${encodedEndpoint}/invocations?qualifier=endpoint_nwp2m`;
     const fullUrl = `${BEDROCK_AGENT_CORE_ENDPOINT_URL}/runtimes/${encodedEndpoint}/invocations`;
     console.log("fullUrl:", fullUrl)
 
@@ -99,6 +102,9 @@ async function streamFromAgentCore(
     let buffer = '';
 
     console.log('ストリーミング開始');
+
+    // 初期ハートビートでストリーミング開始を通知
+    safeEnqueue(encoder.encode(': heartbeat\n\n'));
 
     while (!isClosed) {
       const { done, value } = await reader.read();
@@ -132,6 +138,8 @@ async function streamFromAgentCore(
           try {
             const parsed = JSON.parse(data);
             safeEnqueue(encoder.encode(`data: ${JSON.stringify(parsed)}\n\n`));
+            // 強制フラッシュのためのパディング
+            safeEnqueue(encoder.encode(': flush\n\n'));
             console.log('Sent SSE data');
           } catch {
             // JSONパースエラーは無視
@@ -141,6 +149,8 @@ async function streamFromAgentCore(
           try {
             const parsed = JSON.parse(line);
             safeEnqueue(encoder.encode(`data: ${JSON.stringify(parsed)}\n\n`));
+            // 強制フラッシュのためのパディング
+            safeEnqueue(encoder.encode(': flush\n\n'));
             console.log('Sent JSON data');
           } catch {
             // JSONパースエラーは無視
@@ -210,8 +220,11 @@ export async function POST(request: NextRequest) {
     return new Response(stream, {
       headers: {
         'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
         'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no', // Nginx/プロキシのバッファリング無効化
+        'X-Content-Type-Options': 'nosniff',
+        'Transfer-Encoding': 'chunked', // チャンク転送を明示
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'POST',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Access-Token',
