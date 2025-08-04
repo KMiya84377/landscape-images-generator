@@ -66,8 +66,6 @@ async function streamFromAgentCore(
     if (!isClosed) {
       try {
         controller.enqueue(data);
-        // 強制的にフラッシュするための空データ
-        controller.enqueue(new Uint8Array(0));
       } catch (error) {
         console.warn('Failed to enqueue data:', error);
         isClosed = true;
@@ -101,20 +99,13 @@ async function streamFromAgentCore(
     const decoder = new TextDecoder();
     let buffer = '';
 
-    console.log('ストリーミング開始');
-
-    // 初期ハートビートでストリーミング開始を通知
-    safeEnqueue(encoder.encode(': heartbeat\n\n'));
-
     while (!isClosed) {
       const { done, value } = await reader.read();
       if (done) {
-        console.log('ストリーミング完了');
         break;
       }
 
       const chunk = decoder.decode(value, { stream: true });
-      console.log('Received chunk:', chunk.length, 'bytes');
       buffer += chunk;
 
       // 即座に処理するため、改行ごとに分割して順次処理
@@ -124,8 +115,6 @@ async function streamFromAgentCore(
         buffer = buffer.slice(newlineIndex + 1);
 
         if (!line || isClosed) continue;
-
-        console.log('Processing line:', line.substring(0, 100));
 
         // SSE形式の処理
         if (line.startsWith('data: ')) {
@@ -138,9 +127,6 @@ async function streamFromAgentCore(
           try {
             const parsed = JSON.parse(data);
             safeEnqueue(encoder.encode(`data: ${JSON.stringify(parsed)}\n\n`));
-            // 強制フラッシュのためのパディング
-            safeEnqueue(encoder.encode(': flush\n\n'));
-            console.log('Sent SSE data');
           } catch {
             // JSONパースエラーは無視
           }
@@ -149,9 +135,6 @@ async function streamFromAgentCore(
           try {
             const parsed = JSON.parse(line);
             safeEnqueue(encoder.encode(`data: ${JSON.stringify(parsed)}\n\n`));
-            // 強制フラッシュのためのパディング
-            safeEnqueue(encoder.encode(': flush\n\n'));
-            console.log('Sent JSON data');
           } catch {
             // JSONパースエラーは無視
           }
@@ -184,6 +167,15 @@ async function streamFromAgentCore(
 
 export async function POST(request: NextRequest) {
   try {
+    // Lambda関数とSSE対応の確認
+    console.log('=== Lambda & SSE Info ===');
+    console.log('Lambda Function:', process.env.AWS_LAMBDA_FUNCTION_NAME);
+    console.log('Lambda Region:', process.env.AWS_REGION);
+    console.log('Execution Env:', process.env.AWS_EXECUTION_ENV);
+    console.log('Request Headers:', JSON.stringify(Object.fromEntries(request.headers.entries())));
+    console.log('SSE Support Check: Starting streaming response...');
+    console.log('========================');
+
     // IDトークンを検証
     await validateIdToken(request);
 
@@ -220,11 +212,8 @@ export async function POST(request: NextRequest) {
     return new Response(stream, {
       headers: {
         'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no', // Nginx/プロキシのバッファリング無効化
-        'X-Content-Type-Options': 'nosniff',
-        'Transfer-Encoding': 'chunked', // チャンク転送を明示
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'POST',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Access-Token',

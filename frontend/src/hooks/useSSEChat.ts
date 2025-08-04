@@ -93,8 +93,7 @@ const processStreamingResponse = async (
       for (const line of lines) {
         if (!line.trim()) continue;
         
-        // フラッシュコメントをスキップ
-        if (line.startsWith(': flush') || line.startsWith(': heartbeat')) continue;
+
 
         const dataToProcess = extractDataFromLine(line);
         if (!dataToProcess) {
