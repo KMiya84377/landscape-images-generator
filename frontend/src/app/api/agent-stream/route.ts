@@ -66,9 +66,8 @@ async function streamFromAgentCore(
     if (!isClosed) {
       try {
         controller.enqueue(data);
-        // CloudFrontバッファリング回避のための大きなパディング
-        const padding = ' '.repeat(8192); // 8KB のパディング
-        controller.enqueue(encoder.encode(`${padding}\n`));
+        // 軽量なハートビートでフラッシュ
+        controller.enqueue(encoder.encode(': ping\n\n'));
       } catch (error) {
         console.warn('Failed to enqueue data:', error);
         isClosed = true;
@@ -206,6 +205,12 @@ export async function POST(request: NextRequest) {
     const stream = new ReadableStream({
       async start(controller) {
         console.log('🚀 SSE Stream started');
+        const encoder = new TextEncoder();
+
+        // CloudFrontバッファリング回避のための初期データ
+        controller.enqueue(encoder.encode(': stream-start\n\n'));
+        controller.enqueue(encoder.encode('data: {"status": "connected"}\n\n'));
+
         try {
           await streamFromAgentCore(accessToken, prompt, sessionId, controller);
           console.log('✅ SSE Stream completed successfully');
@@ -213,7 +218,6 @@ export async function POST(request: NextRequest) {
           console.log('❌ SSE Stream failed:', error);
           logError('AgentCore通信', error);
           const errorMessage = getErrorMessage(error);
-          const encoder = new TextEncoder();
 
           try {
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: `AgentCore通信エラー: ${errorMessage}` })}\n\n`));
@@ -227,14 +231,10 @@ export async function POST(request: NextRequest) {
 
     return new Response(stream, {
       headers: {
-        'Content-Type': 'text/event-stream',
+        'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-cache, no-store, must-revalidate',
         'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no', // Nginxバッファリング無効
-        'Transfer-Encoding': 'chunked',
-        'X-Content-Type-Options': 'nosniff',
-        'Pragma': 'no-cache',
-        'Expires': '0',
+        'X-Accel-Buffering': 'no',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'POST',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Access-Token',
