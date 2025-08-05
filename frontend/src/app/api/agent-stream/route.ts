@@ -65,7 +65,17 @@ async function streamFromAgentCore(
   const safeEnqueue = (data: Uint8Array) => {
     if (!isClosed) {
       try {
-        controller.enqueue(data);
+        // CloudFrontの8KBチャンク閾値を超えるようにパディング
+        const minChunkSize = 8192; // 8KB
+        if (data.length < minChunkSize) {
+          const padding = new Uint8Array(minChunkSize - data.length).fill(32); // スペースでパディング
+          const paddedData = new Uint8Array(minChunkSize);
+          paddedData.set(data);
+          paddedData.set(padding, data.length);
+          controller.enqueue(paddedData);
+        } else {
+          controller.enqueue(data);
+        }
       } catch (error) {
         console.warn('Failed to enqueue data:', error);
         isClosed = true;
@@ -231,14 +241,45 @@ export async function POST(request: NextRequest) {
         console.log('🚀 SSE Stream started');
         const encoder = new TextEncoder();
 
-        // CloudFrontタイムアウト回避のため即座にレスポンス開始
-        controller.enqueue(encoder.encode('data: {"status": "connecting"}\n\n'));
-        console.log('📡 Initial response sent to avoid CloudFront timeout');
+        // CloudFrontのHTTP/2フレームサイズ(16KB)を考慮した初期データ
+        const frameSize = 16384; // 16KB
+        const initialData = {
+          status: "connecting",
+          timestamp: new Date().toISOString(),
+          sessionId: sessionId,
+          // フレームサイズを満たすためのパディング
+          padding: ' '.repeat(frameSize - 200) // JSONメタデータ分を差し引き
+        };
+
+        const initialPayload = `data: ${JSON.stringify(initialData)}\n\n`;
+        controller.enqueue(encoder.encode(initialPayload));
+        console.log(`📡 Initial ${initialPayload.length} bytes sent to trigger streaming`);
+
+        // CloudFrontのKeep-Alive(5秒)より短い間隔でハートビート
+        const heartbeatInterval = setInterval(() => {
+          if (!controller.desiredSize || controller.desiredSize <= 0) {
+            clearInterval(heartbeatInterval);
+            return;
+          }
+
+          // 8KB以上のハートビートでバッファリング回避
+          const heartbeatSize = 8192; // 8KB
+          const heartbeatData = {
+            type: "heartbeat",
+            timestamp: new Date().toISOString(),
+            // 8KBを満たすパディング
+            data: ' '.repeat(heartbeatSize - 100)
+          };
+
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(heartbeatData)}\n\n`));
+        }, 3000); // 3秒間隔 (Keep-Alive 5秒より短く)
 
         try {
           await streamFromAgentCore(accessToken, prompt, sessionId, controller);
+          clearInterval(heartbeatInterval);
           console.log('✅ SSE Stream completed successfully');
         } catch (error) {
+          clearInterval(heartbeatInterval);
           console.log('❌ SSE Stream failed:', error);
           logError('AgentCore通信', error);
           const errorMessage = getErrorMessage(error);
@@ -264,13 +305,24 @@ export async function POST(request: NextRequest) {
 
     return new Response(stream, {
       headers: {
+        // SSE必須ヘッダー
         'Content-Type': 'text/event-stream; charset=utf-8',
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0',
         'Connection': 'keep-alive',
+
+        // CloudFront最適化ヘッダー
+        'Transfer-Encoding': 'chunked',
         'X-Accel-Buffering': 'no',
+        'X-Content-Type-Options': 'nosniff',
+
+        // HTTP/2最適化
+        'Vary': 'Accept-Encoding',
+
+        // CORS
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'POST',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Access-Token',
+        'Access-Control-Expose-Headers': 'Content-Length, Content-Type',
       },
     });
   } catch (error) {

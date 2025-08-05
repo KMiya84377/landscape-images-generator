@@ -110,9 +110,9 @@ const processStreamingResponse = async (
           const parsed = JSON.parse(dataToProcess);
           console.log('🔍 Parsed data:', parsed);
           
-          // 接続状態メッセージを無視
-          if (parsed.status === 'connecting') {
-            console.log('🔗 Connection status received, continuing...');
+          // CloudFront対策用のメッセージを無視
+          if (parsed.status === 'connecting' || parsed.type === 'heartbeat') {
+            console.log(`🔗 ${parsed.type || 'connection'} message received, continuing...`);
             continue;
           }
           
