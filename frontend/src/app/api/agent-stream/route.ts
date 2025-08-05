@@ -75,9 +75,10 @@ async function streamFromAgentCore(
 
   try {
     const encodedEndpoint = encodeURIComponent(process.env.AGENT_CORE_ENDPOINT || '');
-    // const fullUrl = `${BEDROCK_AGENT_CORE_ENDPOINT_URL}/runtimes/${encodedEndpoint}/invocations?qualifier=endpoint_nwp2m`;
     const fullUrl = `${BEDROCK_AGENT_CORE_ENDPOINT_URL}/runtimes/${encodedEndpoint}/invocations`;
-    console.log("fullUrl:", fullUrl)
+
+    const fetchStartTime = Date.now();
+    console.log(`🌐 [${new Date().toISOString()}] Starting AgentCore request to: ${fullUrl}`);
 
     const agentResponse = await fetch(fullUrl, {
       method: 'POST',
@@ -86,6 +87,9 @@ async function streamFromAgentCore(
         prompt: prompt.trim(),
       }),
     });
+
+    const fetchEndTime = Date.now();
+    console.log(`📡 [${new Date().toISOString()}] AgentCore response received (${fetchEndTime - fetchStartTime}ms)`);
 
     if (!agentResponse.ok) {
       throw new Error(`AgentCore returned ${agentResponse.status}: ${agentResponse.statusText}`);
@@ -98,14 +102,30 @@ async function streamFromAgentCore(
     reader = agentResponse.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let chunkCount = 0;
+    let firstChunkTime: number | null = null;
+
+    console.log(`📖 [${new Date().toISOString()}] Starting stream reading`);
 
     while (!isClosed) {
+      const chunkStartTime = Date.now();
       const { done, value } = await reader.read();
+
       if (done) {
+        console.log(`🏁 [${new Date().toISOString()}] Stream completed after ${chunkCount} chunks`);
         break;
       }
 
+      chunkCount++;
+      if (firstChunkTime === null) {
+        firstChunkTime = Date.now();
+        console.log(`🥇 [${new Date().toISOString()}] First chunk received (${firstChunkTime - fetchEndTime}ms after response)`);
+      }
+
       const chunk = decoder.decode(value, { stream: true });
+      const chunkSize = chunk.length;
+      console.log(`📦 [${new Date().toISOString()}] Chunk ${chunkCount}: ${chunkSize} bytes (${Date.now() - chunkStartTime}ms)`);
+
       buffer += chunk;
 
       // 即座に処理するため、改行ごとに分割して順次処理
@@ -126,6 +146,7 @@ async function streamFromAgentCore(
 
           try {
             const parsed = JSON.parse(data);
+            console.log(`📤 [${new Date().toISOString()}] Sending SSE data:`, JSON.stringify(parsed).substring(0, 100) + '...');
             safeEnqueue(encoder.encode(`data: ${JSON.stringify(parsed)}\n\n`));
           } catch {
             // JSONパースエラーは無視
@@ -166,11 +187,30 @@ async function streamFromAgentCore(
 }
 
 export async function POST(request: NextRequest) {
+  const requestStartTime = Date.now();
+  const lambdaTimeout = parseInt(process.env.AWS_LAMBDA_FUNCTION_TIMEOUT || '900') * 1000; // 秒をミリ秒に変換
+
+  console.log(`⏰ [${new Date().toISOString()}] Request started`);
+  console.log(`⏱️ Lambda timeout: ${lambdaTimeout}ms (${lambdaTimeout / 1000}s)`);
+
   try {
-    // 起動時エラーの確認
+    // Lambda環境情報
     console.log('🚀 API Route started successfully');
     console.log('Lambda Function:', process.env.AWS_LAMBDA_FUNCTION_NAME);
     console.log('Execution Env:', process.env.AWS_EXECUTION_ENV);
+    console.log('Lambda Timeout:', process.env.AWS_LAMBDA_FUNCTION_TIMEOUT || 'Unknown');
+    console.log('Lambda Memory:', process.env.AWS_LAMBDA_FUNCTION_MEMORY_SIZE || 'Unknown');
+    console.log('Lambda Region:', process.env.AWS_REGION || 'Unknown');
+
+    // CloudFront情報の推測
+    const isCloudFront = request.headers.get('cloudfront-viewer-country') !== null;
+    const cfRequestId = request.headers.get('x-amz-cf-id');
+    console.log('CloudFront detected:', isCloudFront);
+    console.log('CloudFront Request ID:', cfRequestId || 'None');
+
+    if (isCloudFront) {
+      console.log('⚠️ CloudFront timeout: ~30 seconds (estimated)');
+    }
 
     // IDトークンを検証
     await validateIdToken(request);
@@ -191,7 +231,9 @@ export async function POST(request: NextRequest) {
         console.log('🚀 SSE Stream started');
         const encoder = new TextEncoder();
 
-        // ストリーミング開始
+        // CloudFrontタイムアウト回避のため即座にレスポンス開始
+        controller.enqueue(encoder.encode('data: {"status": "connecting"}\n\n'));
+        console.log('📡 Initial response sent to avoid CloudFront timeout');
 
         try {
           await streamFromAgentCore(accessToken, prompt, sessionId, controller);
@@ -210,6 +252,15 @@ export async function POST(request: NextRequest) {
         }
       },
     });
+
+    const responseTime = Date.now() - requestStartTime;
+    const cloudFrontTimeout = 30000; // 30秒固定
+    const lambdaTimeoutWarning = responseTime > (lambdaTimeout * 0.8) ? ' ⚠️ LAMBDA TIMEOUT RISK' : '';
+    const cloudFrontTimeoutWarning = responseTime > (cloudFrontTimeout * 0.8) ? ' 🌩️ CLOUDFRONT TIMEOUT RISK' : '';
+
+    console.log(`✅ [${new Date().toISOString()}] Response created (total: ${responseTime}ms)`);
+    console.log(`📊 Timeouts - Lambda: ${lambdaTimeout}ms, CloudFront: ${cloudFrontTimeout}ms (estimated)`);
+    console.log(`⚡ Status: ${responseTime}ms${lambdaTimeoutWarning}${cloudFrontTimeoutWarning}`);
 
     return new Response(stream, {
       headers: {

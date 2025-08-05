@@ -110,6 +110,12 @@ const processStreamingResponse = async (
           const parsed = JSON.parse(dataToProcess);
           console.log('🔍 Parsed data:', parsed);
           
+          // 接続状態メッセージを無視
+          if (parsed.status === 'connecting') {
+            console.log('🔗 Connection status received, continuing...');
+            continue;
+          }
+          
           const content = extractMessageContent(parsed);
           console.log('📝 Extracted content:', content);
           
