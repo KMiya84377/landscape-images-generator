@@ -199,27 +199,25 @@ export async function POST(request: NextRequest) {
       return new Response('Bad Request: Empty or invalid prompt', { status: 400 });
     }
 
-    // ストリーミングテスト用の簡単なストリーム
+    // AgentCore Runtimeとの通信用ストリーム
     const stream = new ReadableStream({
       async start(controller) {
         console.log('🚀 SSE Stream started');
-        const encoder = new TextEncoder();
-        
         try {
-          // テスト用の簡単なストリーミング
-          for (let i = 1; i <= 3; i++) {
-            console.log(`Sending chunk ${i}`);
-            controller.enqueue(encoder.encode(`data: {"test": "chunk ${i}"}\n\n`));
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          }
-          
-          controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
-          controller.close();
+          await streamFromAgentCore(accessToken, prompt, sessionId, controller);
           console.log('✅ SSE Stream completed successfully');
         } catch (error) {
           console.log('❌ SSE Stream failed:', error);
-          controller.enqueue(encoder.encode(`data: {"error": "Stream failed"}\n\n`));
-          controller.close();
+          logError('AgentCore通信', error);
+          const errorMessage = getErrorMessage(error);
+          const encoder = new TextEncoder();
+
+          try {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: `AgentCore通信エラー: ${errorMessage}` })}\n\n`));
+            controller.close();
+          } catch (controllerError) {
+            console.warn('Controller operation failed:', controllerError);
+          }
         }
       },
     });

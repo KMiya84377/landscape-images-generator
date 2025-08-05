@@ -92,24 +92,34 @@ const processStreamingResponse = async (
 
       for (const line of lines) {
         if (!line.trim()) continue;
-
-
+        
+        console.log('📥 Received line:', line);
 
         const dataToProcess = extractDataFromLine(line);
         if (!dataToProcess) {
-          if (line.includes('[DONE]')) break;
+          if (line.includes('[DONE]')) {
+            console.log('🏁 Stream completed with [DONE]');
+            break;
+          }
           continue;
         }
 
+        console.log('📦 Data to process:', dataToProcess);
+
         try {
           const parsed = JSON.parse(dataToProcess);
+          console.log('🔍 Parsed data:', parsed);
+          
           const content = extractMessageContent(parsed);
+          console.log('📝 Extracted content:', content);
+          
           if (content) {
             currentMessage += content;
             onMessageUpdate(currentMessage);
+            console.log('✅ Message updated:', currentMessage);
           }
-        } catch {
-          // JSONパースエラーは無視
+        } catch (parseError) {
+          console.warn('❌ JSON parse error:', parseError, 'Raw data:', dataToProcess);
         }
       }
     }
