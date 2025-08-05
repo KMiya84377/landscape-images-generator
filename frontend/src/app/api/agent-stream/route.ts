@@ -66,8 +66,6 @@ async function streamFromAgentCore(
     if (!isClosed) {
       try {
         controller.enqueue(data);
-        // 軽量なハートビートでフラッシュ
-        controller.enqueue(encoder.encode(': ping\n\n'));
       } catch (error) {
         console.warn('Failed to enqueue data:', error);
         isClosed = true;
@@ -169,24 +167,10 @@ async function streamFromAgentCore(
 
 export async function POST(request: NextRequest) {
   try {
-    // Lambda関数とSSE対応の確認
-    console.log('=== Lambda & SSE Info ===');
-    console.log('AWS Account:', process.env.AWS_ACCOUNT_ID || 'Unknown');
+    // 起動時エラーの確認
+    console.log('🚀 API Route started successfully');
     console.log('Lambda Function:', process.env.AWS_LAMBDA_FUNCTION_NAME);
-    console.log('Lambda Region:', process.env.AWS_REGION);
     console.log('Execution Env:', process.env.AWS_EXECUTION_ENV);
-    console.log('Lambda Version:', process.env.AWS_LAMBDA_FUNCTION_VERSION);
-    console.log('Memory Size:', process.env.AWS_LAMBDA_FUNCTION_MEMORY_SIZE);
-    console.log('Timeout:', process.env.AWS_LAMBDA_FUNCTION_TIMEOUT);
-    console.log('Runtime:', process.env.AWS_LAMBDA_RUNTIME_API ? 'Lambda' : 'Unknown');
-    console.log('Lambda@Edge Check:', process.env._LAMBDA_SERVER_PORT ? 'Lambda@Edge' : 'Regional Lambda');
-    console.log('CloudFront:', request.headers.get('cloudfront-viewer-country') ? 'Yes' : 'No');
-    console.log('CloudFront Request ID:', request.headers.get('cloudfront-viewer-country'));
-    console.log('User Agent:', request.headers.get('user-agent'));
-    console.log('Accept Header:', request.headers.get('accept'));
-    console.log('Content-Type:', request.headers.get('content-type'));
-    console.log('SSE Support Check: Starting streaming response...');
-    console.log('========================');
 
     // IDトークンを検証
     await validateIdToken(request);
@@ -207,9 +191,7 @@ export async function POST(request: NextRequest) {
         console.log('🚀 SSE Stream started');
         const encoder = new TextEncoder();
 
-        // CloudFrontバッファリング回避のための初期データ
-        controller.enqueue(encoder.encode(': stream-start\n\n'));
-        controller.enqueue(encoder.encode('data: {"status": "connected"}\n\n'));
+        // ストリーミング開始
 
         try {
           await streamFromAgentCore(accessToken, prompt, sessionId, controller);
