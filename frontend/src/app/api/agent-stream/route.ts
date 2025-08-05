@@ -65,17 +65,7 @@ async function streamFromAgentCore(
   const safeEnqueue = (data: Uint8Array) => {
     if (!isClosed) {
       try {
-        // CloudFrontの8KBチャンク閾値を超えるようにパディング
-        const minChunkSize = 8192; // 8KB
-        if (data.length < minChunkSize) {
-          const padding = new Uint8Array(minChunkSize - data.length).fill(32); // スペースでパディング
-          const paddedData = new Uint8Array(minChunkSize);
-          paddedData.set(data);
-          paddedData.set(padding, data.length);
-          controller.enqueue(paddedData);
-        } else {
-          controller.enqueue(data);
-        }
+        controller.enqueue(data);
       } catch (error) {
         console.warn('Failed to enqueue data:', error);
         isClosed = true;
@@ -157,7 +147,16 @@ async function streamFromAgentCore(
           try {
             const parsed = JSON.parse(data);
             console.log(`📤 [${new Date().toISOString()}] Sending SSE data:`, JSON.stringify(parsed).substring(0, 100) + '...');
-            safeEnqueue(encoder.encode(`data: ${JSON.stringify(parsed)}\n\n`));
+            
+            // CloudFrontバッファリング回避のため大きなチャンクで送信
+            const sseData = `data: ${JSON.stringify(parsed)}\n\n`;
+            const forceStreamingSize = 32768; // 32KB - より確実にストリーミングするサイズ
+            
+            // 大きなパディングで強制的にストリーミングモードにする
+            const padding = ' '.repeat(Math.max(0, forceStreamingSize - sseData.length));
+            const streamingSSE = `data: ${JSON.stringify(parsed)}\n: force-streaming${padding}\n\n`;
+            
+            safeEnqueue(encoder.encode(streamingSSE));
           } catch {
             // JSONパースエラーは無視
           }
@@ -241,19 +240,22 @@ export async function POST(request: NextRequest) {
         console.log('🚀 SSE Stream started');
         const encoder = new TextEncoder();
 
-        // CloudFrontのHTTP/2フレームサイズ(16KB)を考慮した初期データ
-        const frameSize = 16384; // 16KB
+        // CloudFrontバッファリング回避のための初期データ
         const initialData = {
           status: "connecting",
           timestamp: new Date().toISOString(),
-          sessionId: sessionId,
-          // フレームサイズを満たすためのパディング
-          padding: ' '.repeat(frameSize - 200) // JSONメタデータ分を差し引き
+          sessionId: sessionId
         };
-
-        const initialPayload = `data: ${JSON.stringify(initialData)}\n\n`;
-        controller.enqueue(encoder.encode(initialPayload));
-        console.log(`📡 Initial ${initialPayload.length} bytes sent to trigger streaming`);
+        
+        const initialSSE = `data: ${JSON.stringify(initialData)}\n\n`;
+        const forceStreamingSize = 32768; // 32KB
+        
+        // 大きな初期データでCloudFrontを強制的にストリーミングモードにする
+        const padding = ' '.repeat(Math.max(0, forceStreamingSize - initialSSE.length));
+        const streamingInitial = `data: ${JSON.stringify(initialData)}\n: streaming-mode${padding}\n\n`;
+        
+        controller.enqueue(encoder.encode(streamingInitial));
+        console.log(`📡 Initial ${streamingInitial.length} bytes sent to force streaming mode`);
 
         // CloudFrontのKeep-Alive(5秒)より短い間隔でハートビート
         const heartbeatInterval = setInterval(() => {
@@ -263,16 +265,19 @@ export async function POST(request: NextRequest) {
           }
 
           // 8KB以上のハートビートでバッファリング回避
-          const heartbeatSize = 8192; // 8KB
+          // 16KBのハートビートでCloudFrontストリーミングを維持
           const heartbeatData = {
             type: "heartbeat",
-            timestamp: new Date().toISOString(),
-            // 8KBを満たすパディング
-            data: ' '.repeat(heartbeatSize - 100)
+            timestamp: new Date().toISOString()
           };
-
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(heartbeatData)}\n\n`));
-        }, 3000); // 3秒間隔 (Keep-Alive 5秒より短く)
+          
+          const heartbeatSSE = `data: ${JSON.stringify(heartbeatData)}\n\n`;
+          const forceStreamingSize = 32768; // 32KB
+          const padding = ' '.repeat(Math.max(0, forceStreamingSize - heartbeatSSE.length));
+          const streamingHeartbeat = `data: ${JSON.stringify(heartbeatData)}\n: heartbeat-streaming${padding}\n\n`;
+          
+          controller.enqueue(encoder.encode(streamingHeartbeat));
+        }, 1000); // 1秒間隔でより頻繁にストリーミングを維持
 
         try {
           await streamFromAgentCore(accessToken, prompt, sessionId, controller);

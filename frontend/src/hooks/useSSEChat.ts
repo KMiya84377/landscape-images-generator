@@ -92,7 +92,7 @@ const processStreamingResponse = async (
 
       for (const line of lines) {
         if (!line.trim()) continue;
-        
+
         console.log(`📥 [${new Date().toISOString()}] Received line:`, line);
 
         const dataToProcess = extractDataFromLine(line);
@@ -100,6 +100,15 @@ const processStreamingResponse = async (
           if (line.includes('[DONE]')) {
             console.log('🏁 Stream completed with [DONE]');
             break;
+          }
+          // CloudFront対策のパディング行を無視
+          if (line.startsWith(': padding') ||
+            line.startsWith(': heartbeat') ||
+            line.startsWith(': force-streaming') ||
+            line.startsWith(': streaming-mode') ||
+            line.startsWith(': heartbeat-streaming') ||
+            line.startsWith(': initial-padding')) {
+            continue;
           }
           continue;
         }
@@ -109,16 +118,16 @@ const processStreamingResponse = async (
         try {
           const parsed = JSON.parse(dataToProcess);
           console.log('🔍 Parsed data:', parsed);
-          
+
           // CloudFront対策用のメッセージを無視
           if (parsed.status === 'connecting' || parsed.type === 'heartbeat') {
             console.log(`🔗 ${parsed.type || 'connection'} message received, continuing...`);
             continue;
           }
-          
+
           const content = extractMessageContent(parsed);
           console.log('📝 Extracted content:', content);
-          
+
           if (content) {
             currentMessage += content;
             onMessageUpdate(currentMessage);
