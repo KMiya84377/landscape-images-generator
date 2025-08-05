@@ -89,11 +89,14 @@ const processStreamingResponse = async (
 
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
+      
+      // 即座に処理するため、setTimeoutを使用
+      await new Promise(resolve => setTimeout(resolve, 0));
 
       for (const line of lines) {
         if (!line.trim()) continue;
         
-        console.log('📥 Received line:', line);
+        console.log(`📥 [${new Date().toISOString()}] Received line:`, line);
 
         const dataToProcess = extractDataFromLine(line);
         if (!dataToProcess) {

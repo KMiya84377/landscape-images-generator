@@ -66,6 +66,9 @@ async function streamFromAgentCore(
     if (!isClosed) {
       try {
         controller.enqueue(data);
+        // CloudFrontバッファリング回避のための大きなパディング
+        const padding = ' '.repeat(8192); // 8KB のパディング
+        controller.enqueue(encoder.encode(`${padding}\n`));
       } catch (error) {
         console.warn('Failed to enqueue data:', error);
         isClosed = true;
@@ -225,8 +228,13 @@ export async function POST(request: NextRequest) {
     return new Response(stream, {
       headers: {
         'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
         'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no', // Nginxバッファリング無効
+        'Transfer-Encoding': 'chunked',
+        'X-Content-Type-Options': 'nosniff',
+        'Pragma': 'no-cache',
+        'Expires': '0',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'POST',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Access-Token',
