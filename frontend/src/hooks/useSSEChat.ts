@@ -17,6 +17,10 @@ const extractDataFromLine = (line: string): string | null => {
     const data = line.slice(6).trim();
     return data === '[DONE]' ? null : data;
   }
+  // SSEコメント行（: で始まる行）は無視
+  if (line.startsWith(': ')) {
+    return null;
+  }
   return line.trim() || null;
 };
 
@@ -101,15 +105,7 @@ const processStreamingResponse = async (
             console.log('🏁 Stream completed with [DONE]');
             break;
           }
-          // CloudFront対策のパディング行を無視
-          if (line.startsWith(': padding') ||
-            line.startsWith(': heartbeat') ||
-            line.startsWith(': force-streaming') ||
-            line.startsWith(': streaming-mode') ||
-            line.startsWith(': heartbeat-streaming') ||
-            line.startsWith(': initial-padding')) {
-            continue;
-          }
+          // SSEコメント行は extractDataFromLine で既に除外済み
           continue;
         }
 
@@ -155,7 +151,8 @@ export function useSSEChat(options: SSEChatOptions = {}) {
 
   const sendMessage = useCallback(async (
     prompt: string,
-    retryCount = 0
+    retryCount = 0,
+    accumulatedMessage = ''
   ): Promise<void> => {
     if (!prompt?.trim()) {
       console.warn('Empty or invalid prompt provided');
@@ -183,11 +180,14 @@ export function useSSEChat(options: SSEChatOptions = {}) {
         },
         body: JSON.stringify({
           prompt,
-          sessionId: sessionIdRef.current,
         }),
       });
 
       if (!response.ok) {
+        // 504 Gateway Timeout の場合は再接続を試行
+        if (response.status === 504) {
+          throw new Error('TIMEOUT_RETRY');
+        }
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
@@ -195,19 +195,23 @@ export function useSSEChat(options: SSEChatOptions = {}) {
         throw new Error('レスポンスボディがありません');
       }
 
-      // 新しいメッセージスロットを追加
-      setMessages(prev => [...prev, '']);
+      // 初回または再接続時のメッセージスロット管理
+      if (retryCount === 0) {
+        setMessages(prev => [...prev, accumulatedMessage]);
+      }
 
       await processStreamingResponse(
         response,
         // メッセージ更新時
         (currentMessage) => {
-          setMessages(prev => [...prev.slice(0, -1), currentMessage]);
+          const fullMessage = accumulatedMessage + currentMessage;
+          setMessages(prev => [...prev.slice(0, -1), fullMessage]);
         },
         // 完了時
         (finalMessage) => {
-          if (finalMessage) {
-            setMessages(prev => [...prev.slice(0, -1), finalMessage]);
+          const fullMessage = accumulatedMessage + finalMessage;
+          if (fullMessage) {
+            setMessages(prev => [...prev.slice(0, -1), fullMessage]);
           } else {
             setMessages(prev => prev.slice(0, -1));
           }
@@ -218,10 +222,28 @@ export function useSSEChat(options: SSEChatOptions = {}) {
       logError('SSE通信', fetchError);
       const errorDetails = getApiErrorDetails(fetchError);
 
-      // 自動再試行
-      if (retryCount < maxRetries) {
+      // タイムアウトエラーの場合は再接続
+      if ((fetchError instanceof Error && fetchError.message === 'TIMEOUT_RETRY') ||
+        errorDetails.message.includes('504') ||
+        errorDetails.message.includes('timeout')) {
+
+        if (retryCount < maxRetries) {
+          console.log(`🔄 SSE reconnecting... (attempt ${retryCount + 1}/${maxRetries})`);
+
+          // 現在のメッセージを保持して再接続
+          const currentMessage = messages[messages.length - 1] || '';
+
+          setTimeout(() => {
+            sendMessage(prompt, retryCount + 1, currentMessage);
+          }, 1000); // 1秒後に再接続
+          return;
+        }
+      }
+
+      // その他のエラーまたは最大再試行回数に達した場合
+      if (retryCount < maxRetries && !(fetchError instanceof Error && fetchError.message.includes('TIMEOUT_RETRY'))) {
         setTimeout(() => {
-          sendMessage(prompt, retryCount + 1);
+          sendMessage(prompt, retryCount + 1, accumulatedMessage);
         }, retryDelay * Math.pow(2, retryCount));
       } else {
         setError(`通信エラー: ${errorDetails.message}`);
@@ -229,7 +251,7 @@ export function useSSEChat(options: SSEChatOptions = {}) {
     } finally {
       setIsLoading(false);
     }
-  }, [getAuthTokens, maxRetries, retryDelay]);
+  }, [getAuthTokens, maxRetries, retryDelay, messages]);
 
   const clearMessages = useCallback(() => {
     setMessages([]);
